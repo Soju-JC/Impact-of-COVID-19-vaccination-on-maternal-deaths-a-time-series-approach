@@ -16,6 +16,11 @@ header-includes:
       innertopmargin=5pt,
       skipabove=10pt,skipbelow=3pt
     ]}{\end{mdframed}}
+  - \usepackage{graphicx}
+  - \setkeys{Gin}{width=\linewidth,keepaspectratio}
+  - \usepackage[export]{adjustbox} % útil se precisar de fallback extra
+  - \usepackage{caption}
+  - \captionsetup{font=small}
 output:   
   pdf_document:
     toc: yes
@@ -26,8 +31,15 @@ output:
     self_contained: no
 ---
 
-```{r setup, include = FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo        = TRUE,
+  fig.align   = "center",
+  out.width   = "\\linewidth",  # <- garante que o knitr peça para caber na linha
+  fig.width   = 7,              # ~ 17.8 cm a 2.54 cm/in; cabe no texto com suas margens
+  fig.height  = 5,
+  dpi         = 300
+)
 ```
 
 \newpage
@@ -75,7 +87,8 @@ packages <-
     "smooth",
     "RcppRoll",
     "ggplot2",
-    "patchwork"
+    "patchwork",
+    "knitr"
   )
 lapply(packages, loadlibrary)
 ```
@@ -85,6 +98,9 @@ Our objective is to analyze data for the period of 2021, which is when vaccinati
 #### Loading the data
 
 ```{r data, message = FALSE}
+# > sample(1:100, 1)
+# [1] 1
+set.seed(1)
 data <- read_csv('dados_SIVEP_Gripe_Brasil_01-02-22.csv')
 
 ## Sample period: 01/03/2021 - 01/01/2022
@@ -814,8 +830,7 @@ pacf(immunizedBR_dif7,
 
 Applying the transformation to the data.
 
-```{r, echo=TRUE,message=FALSE,warning =FALSE,error=FALSE, fig.width= 10, fig.height=8, fig.align='center'}
-
+```{r, echo=TRUE,message=FALSE,warning =FALSE,error=FALSE,fig.align='center'}
 immunizedBR_log <-
   log(ts(series$immunized.BR[start_vac:end_vac]))
 immunizedBR_dif1 <- diff(immunizedBR_log)
@@ -854,6 +869,81 @@ adf.test(immunizedBR_dif7)
 
 The Augmented Dickey-Fuller Test pointed out that the time series is now stationary.
 
+\section{Totals and daily peaks}
+
+```{r, echo=TRUE,message=FALSE,warning =FALSE,error=FALSE}
+# ============================================================
+# Peaks and totals 
+# ============================================================
+
+period_start <- as.Date("2021-01-03")
+period_end <- as.Date("2022-01-01")
+
+# Functions
+get_peak <- function(df, value_col, date_col = "date") {
+  v <- df[[value_col]]
+  d <- df[[date_col]]
+  max_val <- max(v)                   
+  max_dates <- d[v == max_val]
+  list(max_value = as.integer(max_val), max_dates = sort(max_dates))
+}
+
+fmt_dates <- function(x) paste(format(x, "%Y-%m-%d"), collapse = "; ")
+
+
+# Totals
+totals_tbl <- tibble::tibble(
+  indicator = c(
+  "Maternal deaths (total in period)",
+  "Partially vaccinated pregnant and postpartum (dose 1, total)",
+  "Fully vaccinated pregnant and postpartum (dose 2+, total)",
+  "Partially vaccinated Brazil (dose 1, total)",
+  "Fully vaccinated Brazil (dose 2+, total)"
+  ),
+  value = c(
+  sum(series$deaths),
+  sum(series$first_dose.GES),
+  sum(series$immunized.GES),
+  sum(series$first_dose.BR),
+  sum(series$immunized.BR)
+  )
+)
+
+# Peaks
+pk_deaths  <- get_peak(series, "deaths",        "date")
+pk_m_d1    <- get_peak(series, "first_dose.GES","date")
+pk_m_d2    <- get_peak(series, "immunized.GES", "date")
+pk_g_d1    <- get_peak(series, "first_dose.BR", "date")
+pk_g_d2    <- get_peak(series, "immunized.BR",  "date")
+
+peaks_tbl <- tibble::tibble(
+  indicator = c("Peak of daily maternal deaths",
+  "Peak of daily partially vaccinated pregnant and postpartum",
+  "Peak of daily fully vaccinated pregnant and postpartum",
+  "Peak of daily partially vaccinated Brazil",
+  "Peak of daily fully vaccinated Brazil"),
+  peak_value = c(pk_deaths$max_value,
+  pk_m_d1$max_value,
+  pk_m_d2$max_value,
+  pk_g_d1$max_value,
+  pk_g_d2$max_value),
+  peak_dates = c(fmt_dates(pk_deaths$max_dates),
+  fmt_dates(pk_m_d1$max_dates),
+  fmt_dates(pk_m_d2$max_dates),
+  fmt_dates(pk_g_d1$max_dates),
+  fmt_dates(pk_g_d2$max_dates))
+)
+
+# Tables
+cat("Analysis window: ", format(period_start), " to ", format(period_end), "\n\n", sep = "")
+cat("### Totals in the period\n")
+kable(totals_tbl, align = c("l","r"), format = "markdown")
+
+cat("\n\n### Daily peaks (value and date[s])\n")
+kable(peaks_tbl, align = c("l","r","l"), format = "markdown")
+```
+
+
 \section{Impact of COVID-19 vaccination on maternal deaths}
 
 Let's take a look again at our time series, and as we have seen, we are considering the period after the vaccination of pregnant and postpartum women did actually start.
@@ -863,7 +953,7 @@ Let's take a look again at our time series, and as we have seen, we are consider
 Sys.setlocale("LC_TIME", "English")
 ```
 
-```{r, echo=TRUE,message=FALSE,warning =FALSE,error=FALSE, fig.width=11, fig.height=9, fig.align='center'}
+```{r, echo=TRUE,message=FALSE,warning =FALSE,error=FALSE, fig.align='center'}
 p1 <- ggplot(series, 
              aes(x = date, y = deaths)) + 
   geom_line(color = "red") + 
@@ -872,11 +962,17 @@ p1 <- ggplot(series,
                             max(series$date), 
                             length = 24),
                date_labels = "%b %d") +
-  labs(x = "\nDays", 
+  labs(x = "\nDate", 
        y = "Frequency\n", 
        title = "Deaths") +
   theme(axis.text.x = element_text(angle = 50,
                                    hjust = 1),
+        panel.background = element_rect(fill = "white", colour = NA),
+        panel.border     = element_rect(fill = NA, 
+                                        colour = "black", 
+                                        linewidth = 0.5),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
         plot.title = element_text(hjust = 0.5,
                                   size = 12,
                                   face = "bold"))
@@ -889,11 +985,17 @@ p2 <- ggplot(series,
                             max(series$date), 
                             length = 24),
                date_labels = "%b %d") +
-  labs(x = "\nDays", 
+  labs(x = "\nDate", 
        y = "Frequency\n", 
        title = "Partially vaccinated pregnant and postpartum") +
   theme(axis.text.x = element_text(angle = 50,
                                    hjust = 1),
+        panel.background = element_rect(fill = "white", colour = NA),
+        panel.border     = element_rect(fill = NA, 
+                                        colour = "black", 
+                                        linewidth = 0.5),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
         plot.title = element_text(hjust = 0.5,
                                   size = 12,
                                   face = "bold"))
@@ -906,11 +1008,17 @@ p3 <- ggplot(series,
                             max(series$date), 
                             length = 24),
                date_labels = "%b %d") +
-  labs(x = "\nDays", 
+  labs(x = "\nDate", 
        y = "Frequency\n", 
        title = "Partially vaccinated Brazil") +
   theme(axis.text.x = element_text(angle = 50,
                                    hjust = 1),
+        panel.background = element_rect(fill = "white", colour = NA),
+        panel.border     = element_rect(fill = NA, 
+                                        colour = "black", 
+                                        linewidth = 0.5),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
         plot.title = element_text(hjust = 0.5,
                                   size = 12,
                                   face = "bold"))
@@ -923,11 +1031,17 @@ p4 <- ggplot(series,
                             max(series$date), 
                             length = 24),
                date_labels = "%b %d") +
-  labs(x = "\nDays", 
+  labs(x = "\nDate", 
        y = "Frequency\n", 
        title = "Fully vaccinated pregnant and postpartum") +
   theme(axis.text.x = element_text(angle = 50,
                                    hjust = 1),
+        panel.background = element_rect(fill = "white", colour = NA),
+        panel.border     = element_rect(fill = NA, 
+                                        colour = "black", 
+                                        linewidth = 0.5),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
         plot.title = element_text(hjust = 0.5,
                                   size = 12,
                                   face = "bold"))
@@ -940,11 +1054,17 @@ p5 <- ggplot(series,
                             max(series$date), 
                             length = 24),
                date_labels = "%b %d") +
-  labs(x = "\nDays", 
+  labs(x = "\nDate", 
        y = "Frequency\n", 
        title = "Fully vaccinated Brazil") +
   theme(axis.text.x = element_text(angle = 50,
                                    hjust = 1),
+        panel.background = element_rect(fill = "white", colour = NA),
+        panel.border     = element_rect(fill = NA, 
+                                        colour = "black", 
+                                        linewidth = 0.5),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
         plot.title = element_text(hjust = 0.5,
                                   size = 12,
                                   face = "bold"))
@@ -958,9 +1078,9 @@ design <- "
 p1 + p2 + p3 + p4 + p5 + plot_layout(design = design)
 ```
 
-**Figure 23**: graphs of all time series.
+**Figure 23A**: graphs of all time series.
 
-```{r, echo=TRUE,message=FALSE,warning =FALSE,error=FALSE, fig.width=11, fig.height=9, fig.align='center'}
+```{r, echo=TRUE,message=FALSE,warning =FALSE,error=FALSE, fig.width=7, fig.height=6, fig.align='center'}
 p1 <- ggplot(series[start_vac:end_vac,], 
              aes(x = date, y = deaths)) + 
   geom_line(color = "red") + 
@@ -969,11 +1089,17 @@ p1 <- ggplot(series[start_vac:end_vac,],
                             max(series[start_vac:end_vac,]$date), 
                             length = 24),
                date_labels = "%b %d") +
-  labs(x = "\nDays", 
+  labs(x = "\nDate", 
        y = "Frequency\n", 
        title = "Deaths") +
   theme(axis.text.x = element_text(angle = 50,
                                    hjust = 1),
+        panel.background = element_rect(fill = "white", colour = NA),
+        panel.border     = element_rect(fill = NA, 
+                                        colour = "black", 
+                                        linewidth = 0.5),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
         plot.title = element_text(hjust = 0.5,
                                   size = 12,
                                   face = "bold"))
@@ -986,11 +1112,17 @@ p2 <- ggplot(series[start_vac:end_vac,],
                             max(series[start_vac:end_vac,]$date), 
                             length = 24),
                date_labels = "%b %d") +
-  labs(x = "\nDays", 
+  labs(x = "\nDate", 
        y = "Frequency\n", 
        title = "Partially vaccinated pregnant and postpartum") +
   theme(axis.text.x = element_text(angle = 50,
                                    hjust = 1),
+        panel.background = element_rect(fill = "white", colour = NA),
+        panel.border     = element_rect(fill = NA, 
+                                        colour = "black", 
+                                        linewidth = 0.5),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
         plot.title = element_text(hjust = 0.5,
                                   size = 12,
                                   face = "bold"))
@@ -1003,11 +1135,17 @@ p3 <- ggplot(series[start_vac:end_vac,],
                             max(series[start_vac:end_vac,]$date), 
                             length = 24),
                date_labels = "%b %d") +
-  labs(x = "\nDays", 
+  labs(x = "\nDate", 
        y = "Frequency\n", 
        title = "Partially vaccinated Brazil") +
   theme(axis.text.x = element_text(angle = 50,
                                    hjust = 1),
+        panel.background = element_rect(fill = "white", colour = NA),
+        panel.border     = element_rect(fill = NA, 
+                                        colour = "black", 
+                                        linewidth = 0.5),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
         plot.title = element_text(hjust = 0.5,
                                   size = 12,
                                   face = "bold"))
@@ -1020,11 +1158,17 @@ p4 <- ggplot(series[start_vac:end_vac,],
                             max(series[start_vac:end_vac,]$date), 
                             length = 24),
                date_labels = "%b %d") +
-  labs(x = "\nDays", 
+  labs(x = "\nDate", 
        y = "Frequency\n", 
        title = "Fully vaccinated pregnant and postpartum") +
   theme(axis.text.x = element_text(angle = 50,
                                    hjust = 1),
+        panel.background = element_rect(fill = "white", colour = NA),
+        panel.border     = element_rect(fill = NA, 
+                                        colour = "black", 
+                                        linewidth = 0.5),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
         plot.title = element_text(hjust = 0.5,
                                   size = 12,
                                   face = "bold"))
@@ -1037,11 +1181,17 @@ p5 <- ggplot(series[start_vac:end_vac,],
                             max(series[start_vac:end_vac,]$date), 
                             length = 24),
                date_labels = "%b %d") +
-  labs(x = "\nDays", 
+  labs(x = "\nDate", 
        y = "Frequency\n", 
        title = "Fully vaccinated Brazil") +
   theme(axis.text.x = element_text(angle = 50,
                                    hjust = 1),
+        panel.background = element_rect(fill = "white", colour = NA),
+        panel.border     = element_rect(fill = NA, 
+                                        colour = "black", 
+                                        linewidth = 0.5),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
         plot.title = element_text(hjust = 0.5,
                                   size = 12,
                                   face = "bold"))
@@ -1055,9 +1205,9 @@ design <- "
 p1 + p2 + p3 + p4 + p5 + plot_layout(design = design)
 ```
 
-**Figure 24**: graphs of all time series starting on April 27, 2021.
+**Figure 23B**: graphs of all time series starting on April 27, 2021.
 
-For the following analyses, we need all the time series in Figure 23 to be stationary. Thus, the entire procedure performed during the univariate analysis of the series will be considered.
+For the following analyses, we need all the time series in Figure 23B to be stationary. Thus, the entire procedure performed during the univariate analysis of the series will be considered.
 
 ```{r, echo=TRUE,message=FALSE,warning =FALSE,error=FALSE, fig.width=9, fig.height=7, fig.align='center'}
 series_vac <- series[start_vac:end_vac,]
@@ -1093,6 +1243,7 @@ VARselect(df.diff3,
           season = 7,
           exogen = NULL)$selection
 
+# HQ(n) was chosen so as not to penalize too much nor too little
 # Using lag = 2 to build a VAR model
 var1 <-  vars::VAR(df.diff3, 
                    p = 2,
@@ -1116,7 +1267,7 @@ At the 5\% significance level, the test indicates that there is some degree of a
 
 In univariate analysis, residuals of a good predictive model ideally need to be white noise. Being white noise means that the variables of the random process of the time series are independent and identically distributed with zero mean. In multivariate analysis, what is usually done is to analyze the stability of the residuals of the series, in order to identify possible structural breaks through tests known as CUSUM.
 
-```{r, echo=TRUE,message=FALSE,warning =FALSE,error=FALSE, fig.width=9, fig.height=7, fig.align='center'}
+```{r, echo=TRUE,message=FALSE,warning =FALSE,error=FALSE, fig.width=7, fig.height=6, fig.align='center'}
 Stability1 <- stability(var1, type = "OLS-CUSUM")
 plot(Stability1)
 ```
@@ -1137,7 +1288,7 @@ The normality test applied is called Jarque-Bera, which is a common test to be a
 
 An interesting tool in time series is the Granger Causality Test. Consider $X$ and $Y$ two time series, we say that $X$ Granger causes $Y$ if the lagged values of $X$ contribute significantly to determining the present values of $Y$, regardless of past values of $Y$ . In other words, past values of $X$ are relevant to predicting $Y$. With this, we are able to get a sense of whether the past values of the vaccination series had any influence on the values of the series of deaths that we observed.
 
-The Granger Causality Test will be applied in a multivariate way, so that it will tell us if the series we are putting as a cause is Granger causing the values of the other series in the model. The null hypothesis of the test, is that the series we are putting as a cause, Granger cause the other series. In practice, If the null hypothesis is rejected, the test does not say exactly whether the series we are putting as a cause, Granger causes a specific series.
+The Granger Causality Test will be applied in a multivariate way, so that it will tell us if the series we are putting as a cause is Granger causing the values of the other series in the model. The null hypothesis of the test is that the series we are treating as the cause does not Granger-cause the other series (within a single system, not individually). In practice, If the null hypothesis is rejected, the test does not say exactly whether the series we are putting as a cause, Granger causes a specific series.
 
 ```{r, echo=TRUE,message=FALSE,warning =FALSE,error=FALSE, fig.width=9, fig.height=7, fig.align='center'}
 # First dose BR as a cause
@@ -1207,14 +1358,17 @@ extract_varirf <- function(...){
 }
 ```
 
-```{r, echo=TRUE,message=FALSE,warning =FALSE,error=FALSE, fig.width=10, fig.height=6, fig.align='center'}
+```{r, echo=TRUE,message=FALSE,warning =FALSE,error=FALSE, fig.width=7, fig.height=6, fig.align='center'}
+nahead <- 14
+runs <- 100
+orto_irf <- TRUE
 # impulse response functions
 feir1 <- irf(var1,
              impulse = "first_dose.BR",
              response = c("deaths"),
-             n.ahead = 14,
-             ortho = TRUE,
-             runs = 100,
+             n.ahead = nahead,
+             ortho = orto_irf,
+             runs = runs,
              cumulative = TRUE,
              boot = TRUE, 
              ci = 0.95)
@@ -1222,9 +1376,9 @@ feir1 <- irf(var1,
 feir2 <- irf(var1,
              impulse = "immunized.BR",
              response = c("deaths"),
-             n.ahead = 14,
-             ortho = TRUE,
-             runs = 100,
+             n.ahead = nahead,
+             ortho = orto_irf,
+             runs = runs,
              cumulative = TRUE,
              boot = TRUE,
              ic = 0.95,
@@ -1233,9 +1387,9 @@ feir2 <- irf(var1,
 feir3 <- irf(var1,
              impulse = "first_dose.GES",
              response =c("deaths"),
-             n.ahead = 14,
-             ortho = TRUE,
-             runs = 100,
+             n.ahead = nahead,
+             ortho = orto_irf,
+             runs = runs,
              cumulative = TRUE,
              boot = TRUE,
              ic = 0.95)
@@ -1243,9 +1397,9 @@ feir3 <- irf(var1,
 feir4 <- irf(var1,
              impulse = "immunized.GES",
              response = c("deaths"),
-             n.ahead = 14,
-             ortho = TRUE,
-             runs = 100,
+             n.ahead = nahead,
+             ortho = orto_irf,
+             runs = runs,
              cumulative = TRUE,
              boot = TRUE,
              ic = 0.95)
@@ -1269,7 +1423,7 @@ plot1 <- feir1_varirf %>%
   ggtitle("Orthogonal IRF from partially vaccinated Brazil (cumulative)")+
   ylab("Deaths")+
   xlab("\n95% Bootstrap CI, 100 runs") + 
-  scale_x_continuous(breaks = 0:14) +
+  scale_x_continuous(breaks = 0:nahead) +
   coord_cartesian(ylim = c(- 0.07, 0.06)) +
   theme(panel.grid.minor = element_line(color = 'white'),
         panel.grid.major = element_line(color = 'white'),
@@ -1292,7 +1446,7 @@ plot2 <- feir2_varirf %>%
   ggtitle("Orthogonal IRF from fully vaccinated Brazil (cumulative)")+
   ylab("Deaths")+
   xlab("\n95% Bootstrap CI, 100 runs") + 
-  scale_x_continuous(breaks = 0:14) +
+  scale_x_continuous(breaks = 0:nahead) +
   coord_cartesian(ylim = c(- 0.07, 0.06)) +
   theme(panel.grid.minor = element_line(color = 'white'),
         panel.grid.major = element_line(color = 'white'),
@@ -1315,7 +1469,7 @@ plot3 <- feir3_varirf %>%
   ggtitle("Orthogonal IRF from partially vaccinated pregnant and postpartum (cumulative)")+
   ylab("Deaths")+
   xlab("\n95% Bootstrap CI, 100 runs") + 
-  scale_x_continuous(breaks = 0:14) +
+  scale_x_continuous(breaks = 0:nahead) +
   coord_cartesian(ylim = c(- 0.07, 0.06)) +
   theme(panel.grid.minor = element_line(color = 'white'),
         panel.grid.major = element_line(color = 'white'),
@@ -1338,7 +1492,7 @@ plot4 <- feir4_varirf %>%
   ggtitle("Orthogonal IRF from fully vaccinated pregnant and postpartum (cumulative)")+
   ylab("Deaths")+
   xlab("\n95% Bootstrap CI, 100 runs") + 
-  scale_x_continuous(breaks = 0:14) +
+  scale_x_continuous(breaks = 0:nahead) +
   coord_cartesian(ylim = c(- 0.07, 0.06)) +
   theme(panel.grid.minor = element_line(color = 'white'),
         panel.grid.major = element_line(color = 'white'),
